@@ -31,12 +31,9 @@ static int findEntryIndex(Entry *entries, int capacity, uint32_t shift, ObjStrin
 
 	for (;;) {
 		Entry *entry = &entries[index];
-		if (entry->key == NULL) {
-			if (IS_NIL(entry->value)) {
-				// Empty entry
-				return -1;
-			}
-		} else if (entry->key == key) {
+		if (entry->key == NULL)
+			return -1;
+		else if (entry->key == key) {
 			// We found the key
 			return index;
 		}
@@ -122,19 +119,33 @@ Value tableSetIfMissing(RunCtx *runCtx, Table *table, ObjString *key, Value valu
 	return value;
 }
 
+#define NEXT_ENTRY(base, cap, entry) ((entry) + 1 != (base) + (cap) ? (entry) + 1 : (base))
+#define MODULO_DISTANCE(cap, a, b) ((b) >= (a) ? (b) - (a) : (cap) + (b) - (a))
+
 bool tableDelete(Table *table, ObjString *key) {
-	if (table->count == 0)
+	int index = findEntryIndex(table->entries, table->capacity, table->shift, key);
+	if (index < 0)
 		return false;
 
-	// Find the entry.
-	Entry *entry = findEntry(table->entries, table->capacity, table->shift, key);
-	if (entry->key == NULL)
-		return false;
+	Entry *toDelete = table->entries + index;
+	Entry *base = table->entries;
+	int cap = table->capacity;
+	for (Entry *next = NEXT_ENTRY(base, cap, toDelete); ; next = NEXT_ENTRY(base, cap, next)) {
+		if (next->key == NULL) {
+			// next entry is empty
+			toDelete->key = NULL;
+			toDelete->value = NIL_VAL;
+			table->count--;
+			return true;
+		}
 
-	// Place a tombstone in the entry.
-	entry->key = NULL;
-	entry->value = BOOL_VAL(true);
-	return true;
+		Entry *natural = base + indexFor(next->key->hash, table->shift);
+		if (MODULO_DISTANCE(cap, natural, toDelete) < MODULO_DISTANCE(cap, natural, next)) {
+			// swap with next, then remove next
+			*toDelete = *next;
+			toDelete = next;
+		 }
+	}
 }
 
 void tableAddAll(Table *from, Table *to, Error *error) {
@@ -156,11 +167,9 @@ ObjString *tableFindString(Table *table, const uint8_t *chars, int length, uint3
 	uint32_t index = indexFor(hash, table->shift);
 	for (;;) {
 		Entry *entry = &table->entries[index];
-		if (entry->key == NULL) {
-			// Stop if we find an empty non-tombstone entry
-			if (IS_NIL(entry->value))
-				return NULL;
-		} else if (entry->key->string.length == length &&
+		if (entry->key == NULL)
+			return NULL;
+		else if (entry->key->string.length == length &&
 				   entry->key->hash == hash &&
 				   memcmp(entry->key->string.chars, chars, length) == 0) {
 			// We found it
@@ -178,11 +187,9 @@ bool tableGetString(Table *table, const uint8_t *chars, int length, uint32_t has
 	uint32_t index = indexFor(hash, table->shift);
 	for (;;) {
 		Entry *entry = &table->entries[index];
-		if (entry->key == NULL) {
-			// Stop if we find an empty non-tombstone entry
-			if (IS_NIL(entry->value))
-				return false;
-		} else if (entry->key->string.length == length &&
+		if (entry->key == NULL)
+			return false;
+		else if (entry->key->string.length == length &&
 				   entry->key->hash == hash &&
 				   memcmp(entry->key->string.chars, chars, length) == 0) {
 			// We found it
